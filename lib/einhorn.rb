@@ -5,6 +5,7 @@ require 'set'
 require 'socket'
 require 'tmpdir'
 require 'yaml'
+require 'shellwords'
 
 require 'einhorn/third/little-plugger'
 
@@ -85,6 +86,7 @@ module Einhorn
         :argv => [],
         :environ => {},
         :has_outstanding_spinup_timer => false,
+        :re_exec_commandline => nil,
         :stateful => nil,
         # Holds references so that the GC doesn't go and close your sockets.
         :socket_handles => Set.new
@@ -329,7 +331,34 @@ module Einhorn
     end
   end
 
+  # Construct and a command and args that can be used to re-exec
+  # Einhorn for upgrades.
+  def self.upgrade_commandline(prefix=[])
+    cmdline = []
+    if Einhorn::TransientState.re_exec_commandline
+      cmdline += Einhorn::TransientState.re_exec_commandline
+    else
+      cmdline << Einhorn::TransientState.script_name
+    end
+    cmdline += prefix
+    cmdline += Einhorn::State.cmd
+    [cmdline[0], cmdline[1..-1]]
+  end
+
+  # Perform startup checks to ensure our environment is sane
+  def self.sanity_check
+    log_info("Running under Ruby #{RUBY_VERSION}")
+    log_info("Rbenv ruby version: #{ENV['RBENV_VERSION']}") if ENV['RBENV_VERSION']
+    begin
+      bundler_gem = Gem::Specification.find_by_name('bundler')
+      log_info("Using Bundler #{bundler_gem.version.to_s}")
+    rescue Gem::LoadError
+    end
+  end
+
   def self.run
+    sanity_check
+
     Einhorn::Command::Interface.init
     Einhorn::Event.init
 

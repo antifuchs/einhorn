@@ -225,12 +225,25 @@ module Einhorn
       ENV.clear
       ENV.update(Einhorn::TransientState.environ)
 
+      upgrade_sentinel = fork do
+        Einhorn::TransientState.whatami = :upgrade_sentinel
+        Einhorn::Compat.exec(*Einhorn.upgrade_commandline(['--upgrade-check']))
+      end
+      Process.wait(upgrade_sentinel)
+      unless $?.exitstatus.zero?
+        Einhorn.log_error("Can not initiate reload since sentinel process exited with #{$?.exitstatus}")
+        Einhorn::State.reloading_for_preload_upgrade = false
+        read.close
+        return
+      end
+
       begin
-        Einhorn::Compat.exec(
-          Einhorn::TransientState.script_name,
-          ['--with-state-fd', read.fileno.to_s, '--'] + Einhorn::State.cmd,
-          :close_others => false
-          )
+        respawn_commandline = Einhorn.upgrade_commandline(['--with-state-fd', read.fileno.to_s, '--'])
+        Einhorn.log_info("About to re-exec as #{respawn_commandline.inspect}")
+        upgrade_cmd, upgrade_args =
+                     Einhorn::Compat.exec(
+                       *respawn_commandline,
+                       :close_others => false)
       rescue SystemCallError => e
         Einhorn.log_error("Could not reload! Attempting to continue. Error was: #{e}")
         Einhorn::State.reloading_for_preload_upgrade = false
@@ -371,12 +384,7 @@ module Einhorn
       options = {:smooth => false}.merge(options)
 
       Einhorn::State.smooth_upgrade = options.fetch(:smooth)
-
-      if Einhorn::State.path && !Einhorn::State.reloading_for_preload_upgrade
-        reload_for_preload_upgrade
-      else
-        upgrade_workers
-      end
+      reload_for_preload_upgrade
     end
 
     def self.full_upgrade_smooth
